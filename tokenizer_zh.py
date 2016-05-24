@@ -1,6 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
+from collections import defaultdict
 import math
 
 encoding = 'big5hkscs'
@@ -20,6 +21,7 @@ def tokenize(text, lang_code):
     if (lang_code == "en"):
         return text.split()
     elif (lang_code == "zh"):
+        # split() is a placeholder for something that actually makes sense
         return text.decode(encoding).strip().split()
 
 def getLinesFromFile(filename):
@@ -62,8 +64,8 @@ def removeWhitespace(training):
         test.append(s.replace(" ", ""))
     return test
 
-def countNgrams(text, window_size = 4):
-    """
+def countNgrams(text, window_size):
+    '''
     Using a sliding window of 1- and 2-character sequences, construct probability counts for each
     of the ngrams we need statistics for:
 
@@ -72,69 +74,136 @@ def countNgrams(text, window_size = 4):
     :param text: list of strings with segments
     :param window_size: number of characters to separate into unigrams & bigrams. Default is 4.
     :return: a dict whose keys are ngrams and values their prior probability in the provided training set
-    """
+
+    TODO: Make this better. I despise the confusing & convoluted way I'm building these counts
+
+    >>> for key, item in countNgrams(getLinesFromFile("resources/training_ngrams.txt"), 4).items():
+    ...     print key.encode('utf8') + " [" + ", ".join(str(i) for i in item) + "]"
+     日 [1, 0]
+    十日  [0, 1]
+    三月  [0, 1]
+    時間  [0, 1]
+     時 [0, 1]
+    十  [1, 0]
+    時 間 [1, 0]
+     十 [0, 1]
+    日 （ [0, 1]
+    （  [0, 1]
+     （ [0, 1]
+    月  [0, 1]
+     十日 [0, 1]
+    日  [0, 1]
+    十 日 [1, 0]
+    間 ： [0, 1]
+    間  [0, 1]
+    三 月 [1, 0]
+    時  [1, 0]
+    月 十 [0, 1]
+     三 [0, 1]
+    ：  [0, 1]
+     三月 [0, 1]
+     間 [1, 0]
+     時間 [0, 1]
+     ： [0, 1]
+    三  [1, 0]
+     月 [1, 0]
+    '''
+
+    boundary_char = " "
 
     # keys: ngram, including a space representing a boundary
     # values: [char_boundary_count, word_boundary_count]
-    ngram_stats = {}
+    ngram_counts = defaultdict(list)
 
-    # use a library for this?
-
-    # First sequence of window_size characters
     for line in text:
-        # Toss if the character count is too low
-        #line_wo_whitespace = line.replace(" ", "")
-        #if len(line_wo_whitespace) < window_size:
-        if len(line.replace(" ", "")) < window_size:
-            continue
+        # Collapse multiple spaces into a single space
+        line = ' '.join(line.split())
 
-        # i is the beginning index of our window. In other words, how far through the line we have progressed
-        i = 0
-        while len(line) > window_size + i:
-            # this is where we store our characters
-            window = []
-            # j keeps track of how far to the right we had to search to find window_size characters
-            j = 0
+        prev_c = ""
+        prev_prev_c = ""
+        for c in line:
+            # First character only
+            if prev_prev_c == "" and prev_c == "":
+                # word boundaries
+                if c != boundary_char:
+                    # unigram BX
+                    incrementNgramDict(ngram_counts, boundary_char + c, 1)
+            # First two characters only
+            elif prev_prev_c == "" and prev_c != "":
+                # word boundaries
+                if prev_c == boundary_char and c != boundary_char:
+                    # unigram BX
+                    incrementNgramDict(ngram_counts, boundary_char + c, 1)
+                elif prev_c != boundary_char and c == boundary_char:
+                    # unigram XB
+                    incrementNgramDict(ngram_counts, prev_c + boundary_char, 1)
 
-            # ignore windows that begin with whitespace. Since we discard whitespace when building our
-            # window, we end up with the same window multiple times if we don't do this.
-            if line[i] == " ":
-                i += 1
-                continue
+                # character boundaries
+                if prev_c != boundary_char and c != boundary_char:
+                    # unigram BX
+                    incrementNgramDict(ngram_counts, boundary_char + c, 0)
+                    # unigram XB
+                    incrementNgramDict(ngram_counts, prev_c + boundary_char, 0)
+                    # bigram XBY
+                    incrementNgramDict(ngram_counts, prev_c + boundary_char + c, 0)
+                    # word boundary
+                    # bigram BXY
+                    incrementNgramDict(ngram_counts, boundary_char + prev_c + c, 1)
+            # All additional characters, 3 at a time
+            elif prev_prev_c != "" and prev_c != "":
+                # word boundaries
+                if prev_prev_c != boundary_char and prev_c != boundary_char and c == boundary_char:
+                    # bigram WXB
+                    incrementNgramDict(ngram_counts, prev_prev_c + prev_c + boundary_char, 1)
+                elif prev_prev_c != boundary_char and prev_c == boundary_char and c != boundary_char:
+                    # bigram XBY
+                    incrementNgramDict(ngram_counts, prev_prev_c + boundary_char + c, 1)
+                elif prev_prev_c == boundary_char and prev_c != boundary_char and c != boundary_char:
+                    # bigram BYZ
+                    incrementNgramDict(ngram_counts, boundary_char + prev_c + c, 1)
+                    # bigram XBY
+                    incrementNgramDict(ngram_counts, prev_c + boundary_char + c, 0)
+                    # unigram XB
+                    incrementNgramDict(ngram_counts, prev_c + boundary_char, 0)
+                    # unigram BX
+                    incrementNgramDict(ngram_counts, boundary_char + c, 0)
+                if prev_c == boundary_char and c != boundary_char:
+                    # unigram BX
+                    incrementNgramDict(ngram_counts, boundary_char + c, 1)
+                elif prev_c != boundary_char and c == boundary_char:
+                    # unigram XB
+                    incrementNgramDict(ngram_counts, prev_c + boundary_char, 1)
 
-            while len(window) < window_size and len(line) > i + j:
-                # ignore whitespace
-                if line[i + j] != " ":
-                    window.append(line[i + j])
-                j += 1
+                # character boundaries
+                if prev_prev_c != boundary_char and prev_c != boundary_char and c != boundary_char:
+                    # bigram WXB
+                    incrementNgramDict(ngram_counts, prev_prev_c + prev_c + boundary_char, 0)
+                    # bigram XBY
+                    incrementNgramDict(ngram_counts, prev_prev_c + boundary_char + c, 0)
+                    # bigram BYZ
+                    incrementNgramDict(ngram_counts, boundary_char + prev_c + c, 0)
+                    # unigram BX
+                    incrementNgramDict(ngram_counts, boundary_char + c, 0)
+                    # unigram XB
+                    incrementNgramDict(ngram_counts, prev_c + boundary_char, 0)
 
-            if len(window) == window_size:
-                # Identify our ngrams
-                ngrams = []
-                # bigram WXB
-                ngrams.append("".join(window[0:2]) + " ")
-                # unigram XB
-                ngrams.append(window[1] + " ")
-                # bigram XBY
-                ngrams.append(window[1] + " " + window[2])
-                # unigram BY
-                ngrams.append(" " + window[2])
-                # bigram BYZ
-                ngrams.append(" " + "".join(window[2:4]))
+            prev_prev_c = prev_c
+            prev_c = c
 
-                #print "ngrams:", ngrams
+        # This should only happen at the end of the line
+        if c != boundary_char:
+            incrementNgramDict(ngram_counts, c + boundary_char, 1)
 
-                for n in ngrams:
-                    # if it doesn't exist
-                    ngram_stats += (n <- [0, 0])
+    return ngram_counts
 
-            i += 1
+def incrementNgramDict(ngram_counts, ngram, countIdx):
+    # if the key doesn't exist
+    if len(ngram_counts[ngram]) < 1:
+        ngram_counts[ngram].append(0)
+        ngram_counts[ngram].append(0)
 
-    print "ngram_stats:", ngram_stats
+    ngram_counts[ngram][countIdx] += 1
 
-    # Now that we have a dict with all the ngrams we've seen, it's time to start counting
-
-    return ngram_stats
 
 def featurize(text, window_size, ngram_stats):
     """
@@ -204,6 +273,9 @@ def predict(data_set, model):
     """
     predictions = []
 
+    for s in data_set:
+        predictions.append(tokenize(s, "zh"))
+
     return predictions
 
 def main():
@@ -229,11 +301,9 @@ def main():
     model = train(training, window_size, ngram_stats)
 
     # Predict on the test set
-    predictions = predict(test, model)
+    #predictions = predict(test, model)
 
     # Evaluate the results
-    # Can we do xval somehow with scikitlearn?
-
 
 
 
